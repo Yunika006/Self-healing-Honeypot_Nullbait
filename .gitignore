@@ -1,0 +1,35 @@
+# Environment / secrets
+.env
+.env.*
+
+# Logs
+*.log
+build_log.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# Packet captures
+*.pcap
+*.pcapng
+
+# Private keys
+*.pem
+*.key
+
+# Temporary files
+*.tmp
+*.swp

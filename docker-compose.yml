@@ -1,0 +1,205 @@
+# NullBait - Intelligent Adaptive Honeypot System
+# This file defines and wires together every container in the system.
+
+# ─────────────────────────────────────────────────────────
+# NETWORKS
+# We use two networks:
+#   - nullbait_internal: for backend services to talk privately
+#   - nullbait_public: honeypot services face this network
+#     so they're reachable but isolated from core systems
+# ─────────────────────────────────────────────────────────
+networks:
+  nullbait_internal:
+    driver: bridge
+  nullbait_public:
+    driver: bridge
+
+# ─────────────────────────────────────────────────────────
+# VOLUMES
+# Named volumes so data survives container restarts
+# ─────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+# ─────────────────────────────────────────────────────────
+# SERVICES
+# ─────────────────────────────────────────────────────────
+services:
+
+  # ── 1. DATABASE ─────────────────────────────────────────
+  # PostgreSQL stores everything: attack logs, sessions,
+  # threat scores, credentials captured, recovery history.
+  db:
+    image: postgres:15-alpine
+    container_name: nullbait_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # init.sql runs automatically on first startup
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # persistent data volume so logs survive reboots
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nullbait_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 2. BACKEND API ──────────────────────────────────────
+  # FastAPI application. Handles all REST endpoints,
+  # WebSocket connections, and database writes.
+  # Depends on db being healthy before starting.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nullbait_backend
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${BACKEND_PORT}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - nullbait_internal
+    volumes:
+      # Mount source so code changes reflect without rebuild
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── 3. HONEYPOT ENGINE ──────────────────────────────────
+  # Runs all fake vulnerable services simultaneously.
+  # Sits on the public network so attackers can reach it,
+  # but also connects to internal to send events to backend.
+  honeypot:
+    build:
+      context: ./honeypot
+      dockerfile: Dockerfile
+    container_name: nullbait_honeypot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Expose fake services to the host (and the world if on VPS)
+      - "${SSH_HONEYPOT_PORT}:2222"
+      - "${HTTP_HONEYPOT_PORT}:8080"
+      - "${FTP_HONEYPOT_PORT}:2121"
+      - "${API_HONEYPOT_PORT}:8888"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - nullbait_internal
+      - nullbait_public
+    volumes:
+      - ./honeypot:/app
+
+  # ── 4. DETECTION ENGINE ─────────────────────────────────
+  # Continuously reads from the attack_events table,
+  # applies detection rules, updates threat scores,
+  # and fires alerts back to the backend.
+  detection:
+    build:
+      context: ./detection
+      dockerfile: Dockerfile
+    container_name: nullbait_detection
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - nullbait_internal
+    volumes:
+      - ./detection:/app
+
+  # Watchdog that monitors all containers every 10 seconds.
+  # If the honeypot crashes it auto-restarts it and logs
+  # the recovery event to the database.
+  # Needs Docker socket to control other containers.
+  recovery:
+    build:
+      context: ./recovery
+      dockerfile: Dockerfile
+    container_name: nullbait_recovery
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - backend
+    networks:
+      - nullbait_internal
+    volumes:
+      - ./recovery:/app
+      # Docker socket lets recovery engine restart containers
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # ── 6. FRONTEND ─────────────────────────────────────────
+  # React dashboard served by Nginx inside the container.
+  # Talks to backend via REST and WebSocket.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: http://10.10.1.141:8000
+        REACT_APP_WS_URL: ws://10.10.1.141:8000
+    container_name: nullbait_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT}:80"
+    depends_on:
+      - backend
+    networks:
+      - nullbait_internal
+  #-7. Prometheus───────────────────
+  # Scrapes metrics from backend and honeypot containers.
+  # Stores time-series data for Grafana to visualize.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nullbait_prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - nullbait_internal
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  # ── 8. GRAFANA ──────────────────────────────────────────
+  # Visualization layer for Prometheus metrics.
+  # Pre-loaded with NullBait dashboard.
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nullbait_grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - nullbait_internal

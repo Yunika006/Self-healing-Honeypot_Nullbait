@@ -1,0 +1,88 @@
+{
+  "title": "NullBait — System Monitoring",
+  "uid": "nullbait-main",
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Attack Events Rate (per minute)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(nullbait_attack_events_total[1m])) * 60",
+          "legendFormat": "events/min"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Login Attempts by Service",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(nullbait_login_attempts_total[1m])) by (service) * 60",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Active Dashboard Connections",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "nullbait_active_websocket_connections" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Unique Attackers",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "nullbait_unique_attackers" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Critical Threats",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "nullbait_critical_threats" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Backend Process CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{job=\"nullbait_backend\"}[1m]) * 100" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Total Attack Events (all time)",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "sum(nullbait_attack_events_total)" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Backend Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        { "expr": "process_resident_memory_bytes{job=\"nullbait_backend\"} / 1024 / 1024" }
+      ]
+    }
+  ]
+}
